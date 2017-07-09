@@ -61,12 +61,11 @@ var allStages = []stage{
 		"Trim txn-queues that are longer than 1000",
 		func(db *mgo.Database, txns *mgo.Collection) error {
 			collections := getAllPurgeableCollections(db)
-			trimmer := &LongTxnTrimmer{
-				timer:        newSimpleTimer(15 * time.Second),
-				txns:         txns,
-				longTxnSize:  1000,
-				txnBatchSize: txnBatchSize,
-			}
+			trimmer := NewLongTxnTrimmer(LongTxnTrimmerParams{
+				Txns:         txns,
+				LongTxnSize:  1000,
+				TxnBatchSize: txnBatchSize,
+			})
 			return trimmer.Trim(collections)
 		},
 	}, {
@@ -212,6 +211,13 @@ func commandLine() commandLineArgs {
 		"user for connecting to MonogDB (use \"\" to for no authentication)")
 	flags.StringVar(&a.password, "password", "",
 		"password for connecting to MonogDB")
+	// Approximation is that 2x the batch size costs 2x the memory, and gives 1.5x the performance.
+	// Concrete numbers from a run with several bad documents with 280k queues:
+	// BatchSize	Time	PeakMem
+	//  20000	80min	 763MB
+	//  50000	36min	 717MB
+	// 100000	24min	1436MB
+	// 200000	14min	2433MB
 	flags.IntVar(&txnBatchSize, "txn-batch-size", defaultTxnBatchSize,
 		"how many transactions to process at once, higher requires more memory but completes faster")
 	var rawStages string

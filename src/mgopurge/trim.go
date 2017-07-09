@@ -12,6 +12,106 @@ import (
 	"gopkg.in/mgo.v2/txn"
 )
 
+type LongTxnTrimmerParams struct {
+
+	// Txns is the transaction collection that we will be removing transactions
+	// from.
+	Txns *mgo.Collection
+
+	// Timer is a simpleTimer that we will use to send updated progress
+	// messages to the log file
+	Timer *simpleTimer
+
+	// LongTxnSize is a number that indicates when we will consider a
+	// document's queue to be too long, and thus needs to be trimmed.
+	// Documents with txn-queues shorter than this will be ignored.
+	// And transactions that were found from another document will also
+	// be ignored if they involve another document whose queue is too
+	// short.
+	LongTxnSize int
+
+	// TxnBatchSize is how many transactions we will consider at a time.
+	// Updating long txn-queues is generally quite expensive, and being
+	// able to remove more tokens per pass significantly improves the
+	// speed of trimming. However, it also consumes more memory.
+	// Current numbers are roughly linear both ways (doubling the max
+	// queue roughly doubles peak memory, but speeds up processing by 50%)
+	TxnBatchSize int
+}
+
+// NewLongTxnTrimmer creates a new trimmer for use in processing transactions.
+// After instantiation, call Trim() with the collection names that you want to process.
+func NewLongTxnTrimmer(params LongTxnTrimmerParams) *LongTxnTrimmer {
+	timer := params.Timer
+	if timer == nil {
+		timer = newSimpleTimer(15 * time.Second)
+	}
+	if params.TxnBatchSize == 0 {
+		params.TxnBatchSize = defaultTxnBatchSize
+	}
+	return &LongTxnTrimmer{
+		txns:         params.Txns,
+		timer:        timer,
+		longTxnSize:  params.LongTxnSize,
+		txnBatchSize: params.TxnBatchSize,
+	}
+}
+
+// LongTxnTrimmer handles processing transaction queues that have grown unmanageable
+// to be handled by the normal Resume logic.
+// The basic logic is as follows:
+//   1) Iterate all collection names passed into Trim() looking for documents
+//	whose queues are longer than LongTxnSize. Cache all of those documents
+//	in memory by their collection name and document id.
+//   2) Track all of the transaction ids that are referenced by those documents.
+//	Queue up the unique set of transaction ids to be processed. (most
+//	transactions that involve multiple documents will cause all of the
+//	involved documents to have over-long queues.)
+//   3) Iterate through the transaction ids loading them in batches, to find
+//	transactions that fit the criteria for being purged. The basic criteria
+//	is:
+//	a) Transactions must be in either 'preparing' or 'prepared' state.
+//	   Transactions that have progressed past this state are not eligible
+//	   for being purged, because they may have already made changes to
+//	   the database.
+//	b) Transactions must only involve documents where each document has
+//	   a transaction queue that is too long.
+//   4) For transactions that meet the criteria, remove them from the database.
+//	This leaves the database inconsistent, but in a manner that can be
+//	handled in the future by a PurgeMissing step.
+//	(if we wanted to avoid the consistency issue, we could flag of of
+//	these transactions as stage 'preparing' first, removing the nonce,
+//	and then do step (5), and then follow up with another stage to remove
+//	all of the transactions. However, this means touching the bad transactions
+//	twice.
+//   5) In parallel, for all of the documents remove all of their references to
+// 	the transactions that were removed (any token that references the removed
+// 	txn, regardless of the nonce.) This restores the database consistency.
+//	This seems to be the most expensive step currently, as very-long
+//	transactions queues essentially mean the large data needs to be
+//	rewritten potentially multiple times depending on the batch size.
+//	The largest txn-queue that we've seen is around 290k items. (about the
+//	maximum number of tokens you can fit before the object is >16MB max size)
+type LongTxnTrimmer struct {
+	txns  *mgo.Collection
+	timer *simpleTimer
+
+	docCache map[docKey]*txnDoc
+
+	txnsToProcess []bson.ObjectId
+
+	longTxnSize int
+
+	mu                sync.Mutex
+	txnBatchSize      int
+	txnsRemovedCount  int
+	txnsRemovedTime   time.Duration
+	txnsNotTouched    int
+	docCleanupCount   int
+	tokensPulledCount int
+	tokensPulledTime  time.Duration
+}
+
 type parsedToken struct {
 	token string
 	txnId bson.ObjectId
@@ -49,18 +149,6 @@ func findDocsWithLongQueues(coll *mgo.Collection, queueSize int) ([]txnDoc, erro
 	return docs, nil
 }
 
-func tokenToIdNonce(token interface{}) (bson.ObjectId, string, bool) {
-	tokenStr, ok := token.(string)
-	if !ok {
-		return "", "", false
-	}
-	if !validToken.MatchString(tokenStr) {
-		return "", "", false
-	}
-	// take the first 24 hex chars as the object ID, and the last 8 chars as the nonce
-	return bson.ObjectIdHex(tokenStr[:24]), tokenStr[25:], true
-}
-
 // defaultTxnBatchSize is how many transactions we process per batch (affects how many
 // we will Remove() at one pass and how many tokens we could pull in one pass.)
 // On a DB with 3 docs with 200k+ txn-queues, using 50,000 needed ~800MB of memory.
@@ -73,28 +161,6 @@ const defaultTxnBatchSize = 50000
 // we will hang waiting for the database to perform the operation, so its a bit
 // nicer to set it a bit lower.
 const maxTxnRemoveCount = 10000
-
-// LongTxnTrimmer handles processing transaction queues that have grown unmanageable
-// to be handled by the normal Resume logic.
-type LongTxnTrimmer struct {
-	txns  *mgo.Collection
-	timer *simpleTimer
-
-	docCache map[docKey]*txnDoc
-
-	txnsToProcess []bson.ObjectId
-
-	longTxnSize int
-
-	mu                sync.Mutex
-	txnBatchSize      int
-	txnsRemovedCount  int
-	txnsRemovedTime   time.Duration
-	txnsNotTouched    int
-	docCleanupCount   int
-	tokensPulledCount int
-	tokensPulledTime  time.Duration
-}
 
 // loadTxns ensures the transactions are in the txnCache
 func (ltt *LongTxnTrimmer) loadTxns(ids []bson.ObjectId) (map[bson.ObjectId]*rawTransaction, error) {
@@ -453,16 +519,6 @@ func (ltt *LongTxnTrimmer) Trim(collNames []string) error {
 		time.Since(tStart),
 	)
 	return nil
-}
-
-func TrimLongTransactionQueues(txns *mgo.Collection, maxQueueLength int, collNames ...string) error {
-	trimmer := &LongTxnTrimmer{
-		timer:        newSimpleTimer(15 * time.Second),
-		txns:         txns,
-		longTxnSize:  maxQueueLength,
-		txnBatchSize: defaultTxnBatchSize,
-	}
-	return trimmer.Trim(collNames)
 }
 
 func newSimpleTimer(interval time.Duration) *simpleTimer {

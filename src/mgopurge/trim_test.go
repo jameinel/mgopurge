@@ -42,7 +42,12 @@ func (s *TrimSuite) TestTrimSimpleTest(c *gc.C) {
 	c.Assert(err, jc.ErrorIsNil)
 	c.Check(result["foo"], gc.Equals, "bar")
 	c.Check(result["txn-queue"], gc.HasLen, 1)
-	err = TrimLongTransactionQueues(s.txns, 100, "coll")
+	trimmer := NewLongTxnTrimmer(LongTxnTrimmerParams{
+		Txns:        s.txns,
+		LongTxnSize: 100,
+	})
+	err = trimmer.Trim([]string{"coll"})
+
 	c.Assert(err, jc.ErrorIsNil)
 	// untouched
 	err = s.coll.FindId(0).One(&result)
@@ -80,7 +85,11 @@ func (s *TrimSuite) createDocWith51Txns(c *gc.C) {
 
 func (s *TrimSuite) TestTrimNotLongEnough(c *gc.C) {
 	s.createDocWith51Txns(c)
-	err := TrimLongTransactionQueues(s.txns, 100, "coll")
+	trimmer := NewLongTxnTrimmer(LongTxnTrimmerParams{
+		Txns:        s.txns,
+		LongTxnSize: 100,
+	})
+	err := trimmer.Trim([]string{"coll"})
 	c.Assert(err, jc.ErrorIsNil)
 	// untouched
 	var result bson.M
@@ -91,11 +100,11 @@ func (s *TrimSuite) TestTrimNotLongEnough(c *gc.C) {
 
 func (s *TrimSuite) TestTrimmedSingleDoc(c *gc.C) {
 	s.createDocWith51Txns(c)
-	trimmer := &LongTxnTrimmer{
-		txns:         s.txns,
-		longTxnSize:  50,
-		txnBatchSize: 5,
-	}
+	trimmer := NewLongTxnTrimmer(LongTxnTrimmerParams{
+		Txns:         s.txns,
+		LongTxnSize:  50,
+		TxnBatchSize: 5,
+	})
 	count, err := s.txns.Count()
 	c.Assert(err, jc.ErrorIsNil)
 	c.Check(count, gc.Equals, 51)
@@ -156,11 +165,11 @@ func (s *TrimSuite) createMultiDocTxns(c *gc.C) {
 
 func (s *TrimSuite) TestTrimMultiDoc(c *gc.C) {
 	s.createMultiDocTxns(c)
-	trimmer := &LongTxnTrimmer{
-		txns:         s.txns,
-		longTxnSize:  50,
-		txnBatchSize: 13,
-	}
+	trimmer := NewLongTxnTrimmer(LongTxnTrimmerParams{
+		Txns:         s.txns,
+		LongTxnSize:  50,
+		TxnBatchSize: 13,
+	})
 	count, err := s.txns.Count()
 	c.Assert(err, jc.ErrorIsNil)
 	c.Check(count, gc.Equals, 52)
@@ -200,11 +209,11 @@ func (s *TrimSuite) TestTrimMultiDocWithExtras(c *gc.C) {
 		Insert: bson.M{"new": "stuff"},
 	}}, "", nil)
 	c.Assert(err, gc.Equals, txn.ErrChaos)
-	trimmer := &LongTxnTrimmer{
-		txns:         s.txns,
-		longTxnSize:  50,
-		txnBatchSize: 17,
-	}
+	trimmer := NewLongTxnTrimmer(LongTxnTrimmerParams{
+		Txns:         s.txns,
+		LongTxnSize:  50,
+		TxnBatchSize: 17,
+	})
 	count, err := s.txns.Count()
 	c.Assert(err, jc.ErrorIsNil)
 	c.Check(count, gc.Equals, 53)
