@@ -2,6 +2,12 @@
 	"version": 0,
 	"dependencies": [
 		{
+			"importpath": "github.com/juju/clock",
+			"repository": "https://github.com/juju/clock",
+			"revision": "bab88fc672997ef02d03f85310182d97a93dee21",
+			"branch": "master"
+		},
+		{
 			"importpath": "github.com/juju/errors",
 			"repository": "https://github.com/juju/errors",
 			"revision": "c7d06af17c68cd34c835053720b21f6549d9b0ee",
@@ -22,19 +28,19 @@
 		{
 			"importpath": "github.com/juju/testing",
 			"repository": "https://github.com/juju/testing",
-			"revision": "2fe0e88cf2321d801acedd2b4f0d7f63735fb732",
+			"revision": "b0b89ba330f22548fba865dd0e1d85a44e9cd7dd",
 			"branch": "master"
 		},
 		{
 			"importpath": "github.com/juju/txn",
 			"repository": "https://github.com/juju/txn",
-			"revision": "941c396af5296a396a375bd88549552bd7a40dcd",
+			"revision": "f08211fa34f20cae79efd3dde0f54c77238292c3",
 			"branch": "master"
 		},
 		{
 			"importpath": "github.com/juju/utils",
 			"repository": "https://github.com/juju/utils",
-			"revision": "cfc83907d6929f2b7726f3baafa99c71f648e562",
+			"revision": "bf9cc5bdd62dabc40b7f634b39a5e2dc44d44c45",
 			"branch": "master"
 		},
 		{
@@ -49,6 +55,13 @@
 			"revision": "51714a8c4ac1764f07ab4127d7f739351ced4759",
 			"branch": "master",
 			"path": "/pbkdf2"
+		},
+		{
+			"importpath": "golang.org/x/net/context",
+			"repository": "https://go.googlesource.com/net",
+			"revision": "8a410e7b638dca158bf9e766925842f6651ff828",
+			"branch": "master",
+			"path": "/context"
 		},
 		{
 			"importpath": "gopkg.in/check.v1",
